@@ -2,8 +2,9 @@
 
 `agent-gh` runs the official GitHub CLI (`gh`) with a GitHub App installation token, so issues,
 comments, and pull requests that an agent creates are attributed to the App's bot account instead
-of the user. A hook in the agent harness (Claude Code or Codex) blocks direct `gh` commands and
-tells the agent to use `agent-gh`.
+of the user. Commands that match the configuration's `run_as_user` list run with the user's
+credentials; see [Design](#design). A hook in the agent harness (Claude Code or Codex) blocks direct
+`gh` commands and tells the agent to use `agent-gh`.
 
 ## Setup
 
@@ -39,6 +40,37 @@ replaces `~/.config`. The token cache stays in the platform cache directory:
 On Linux, `XDG_CACHE_HOME` replaces `~/.cache`. `AGENT_GH_CONFIG` names a different configuration
 file, and `AGENT_GH_CACHE_DIR` names a different cache directory.
 
+## Design
+
+`agent-gh` runs every `gh` command with the App's installation token, except commands that match an
+entry of the optional `run_as_user` list in the configuration file:
+
+```toml
+run_as_user = ["pr create", "pr new"]
+```
+
+A command matches an entry when its leading arguments equal the entry's whitespace-separated words,
+compared case-sensitively. The entry `pr create` matches `agent-gh pr create --fill`, but not
+`agent-gh pr --repo owner/repo create`, which runs with the installation token. For a matching
+command, `agent-gh` does not request a token and runs `gh` with the environment unchanged, so `gh`
+uses the user's credentials: `GH_TOKEN` or `GITHUB_TOKEN` when set, and otherwise the login stored
+by `gh auth login`.
+
+`agent-gh` defaults to the installation token to keep every unmatched command within the App's
+access. The installation's repository selection and permissions limit the installation token, while
+the user's credentials usually reach every repository the user can access. If the user's
+credentials were the default, every command missing from the list would run with them without a
+warning, including `gh api`, `gh` aliases, and subcommands that later `gh` releases add. With the
+installation token as the default, a command missing from the list is attributed to the bot, so the
+list needs to name only the commands whose attribution matters.
+
+GitHub makes the author of a pull request the author of its squash-merged commit. When
+`run_as_user` lists `pr create` and its alias `pr new`, `gh` opens the agent's pull requests with
+the user's credentials, so the user authors the squash commits of those pull requests. The squash
+commit also credits the App's bot account as a co-author when its message keeps the
+`Co-authored-by` trailers of the pull request's commits; this repository's `commit-msg` hook adds
+those trailers (see [Development](#development)).
+
 ## Usage
 
 `agent-gh` accepts the same arguments as `gh`:
@@ -48,10 +80,11 @@ agent-gh issue comment 123 --body-file checkpoint.md
 agent-gh pr create --head prepared-branch --body-file pr.md
 ```
 
-`agent-gh` reuses a cached token until five minutes before the token expires, then requests a new
-one. It runs `gh` with the token in `GH_TOKEN` and with `GH_HOST=github.com`, and removes
-`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` from `gh`'s environment. The
-user's stored `gh` login is not used or modified.
+For a command that does not match `run_as_user`, `agent-gh` reuses a cached token until five
+minutes before the token expires, then requests a new one. It runs `gh` with the token in
+`GH_TOKEN` and with `GH_HOST=github.com`, and removes `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and
+`GITHUB_ENTERPRISE_TOKEN` from `gh`'s environment, so `gh` sends the installation token instead of
+the user's stored github.com login. `agent-gh` never modifies the stored login.
 
 | Command                    | Behavior                                                        |
 | -------------------------- | --------------------------------------------------------------- |
@@ -96,8 +129,9 @@ exits 0 without output.
 
 ## Limitations
 
-- The hook reduces accidental use of personal credentials; scripts and HTTP clients can still use
-  any credentials the agent's user can read.
+- The hook reduces accidental use of personal credentials, and commands that match `run_as_user`
+  use them by design. Scripts, HTTP clients, and the Git commands that `gh` runs can still use any
+  credentials the agent's user can read.
 - On Unix, the cache directory is created with mode `0700` and the cache file with `0600`. On
   Windows, the cache inherits the ACL of `%LOCALAPPDATA%`, which can grant access to other accounts
   such as Codex sandbox users. A cached token expires within an hour.
@@ -105,9 +139,10 @@ exits 0 without output.
   a `*.ghe.com` host, that host receives the installation token.
 - GitHub Enterprise Server, multiple Apps or installations, and Git push authentication are not
   supported. Git commands that the agent runs directly use the user's Git identity and credentials.
-- Bot attribution has not yet been verified for creating and editing issues, commenting, or
-  creating pull requests. Access to a user-owned Project and the hook's behavior in a live Claude
-  Code or Codex session have not been verified either.
+- Bot attribution has not yet been verified for creating and editing issues or for commenting.
+  Access to a user-owned Project and the hook's behavior in a live Claude Code or Codex session have
+  not been verified either. It is also unverified whether GitHub's default squash-merge message
+  keeps the `Co-authored-by` trailers of a pull request's commits.
 
 ## Development
 

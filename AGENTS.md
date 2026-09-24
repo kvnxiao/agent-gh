@@ -50,7 +50,8 @@ build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked`
 ## Rules
 
 - Run every GitHub CLI command as `agent-gh` with the usual `gh` arguments, for example
-  `agent-gh pr view 1`, so GitHub attributes the work to `kvnxiao-agent[bot]`.
+  `agent-gh pr view 1`. `agent-gh` runs the command as `kvnxiao-agent[bot]` unless the command
+  matches the user's `run_as_user` configuration.
 - Before writing or reviewing `*.rs` files or Cargo, Clippy, rustfmt, or toolchain manifests, read
   `.agents/skills/rust-rules/SKILL.md` and the references it lists for the task.
 - Before writing or reviewing `.github/workflows/**`, read

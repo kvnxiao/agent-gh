@@ -158,6 +158,7 @@ mod tests {
             app_id: NonZeroU64::new(1234).expect("fixture ID is nonzero"),
             installation_id: NonZeroU64::new(5678).expect("fixture ID is nonzero"),
             private_key_path: key_path,
+            run_as_user: Vec::new(),
         }
     }
 

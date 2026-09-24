@@ -40,9 +40,15 @@ impl Sandbox {
     }
 
     pub(crate) fn write_config(&self) {
+        self.write_config_with("");
+    }
+
+    pub(crate) fn write_config_with(&self, extra_lines: &str) {
         fs_err::write(
             self.path("config.toml"),
-            "app_id = 1\ninstallation_id = 2\nprivate_key_path = \"missing.pem\"\n",
+            format!(
+                "app_id = 1\ninstallation_id = 2\nprivate_key_path = \"missing.pem\"\n{extra_lines}"
+            ),
         )
         .expect("configuration is written");
     }

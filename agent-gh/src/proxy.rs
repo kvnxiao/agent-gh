@@ -23,6 +23,12 @@ pub(crate) fn run_gh(args: &[OsString], token: &str) -> Result<ExitCode> {
     launch(command)
 }
 
+pub(crate) fn run_gh_as_user(args: &[OsString]) -> Result<ExitCode> {
+    let mut command = Command::new("gh");
+    command.args(args);
+    launch(command)
+}
+
 #[cfg(unix)]
 fn launch(mut command: Command) -> Result<ExitCode> {
     use std::os::unix::process::CommandExt;

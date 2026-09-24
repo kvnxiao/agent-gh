@@ -27,7 +27,8 @@ pub(crate) fn block_message(payload: impl Read) -> Option<String> {
     match bash::find_direct_gh(&command) {
         Ok(Some(word)) => Some(format!(
             "agent-gh: `{word}` runs the GitHub CLI with personal credentials. Replace `{word}` \
-             with `agent-gh` to run the same command as the GitHub App bot."
+             with `agent-gh` to run the command as the GitHub App bot, or as the user when the \
+             command matches the run_as_user configuration."
         )),
         Err(ParseError::TooDeep) => Some(format!(
             "agent-gh: cannot check this command: it nests more than {MAX_NESTING} levels of \

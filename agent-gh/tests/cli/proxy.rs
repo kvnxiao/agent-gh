@@ -4,6 +4,15 @@ use crate::support::run;
 use crate::support::text;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+
+const PERSONAL_ENV: [(&str, &str); 5] = [
+    ("GH_TOKEN", "personal-token"),
+    ("GH_HOST", "enterprise.example.com"),
+    ("GITHUB_TOKEN", "personal-token"),
+    ("GH_ENTERPRISE_TOKEN", "enterprise-token"),
+    ("GITHUB_ENTERPRISE_TOKEN", "enterprise-token"),
+];
 
 #[test]
 fn passes_arguments_stdin_working_directory_and_exit_status() {
@@ -40,16 +49,7 @@ fn passes_arguments_stdin_working_directory_and_exit_status() {
 fn sets_installation_token_and_removes_other_tokens() {
     let sandbox = Sandbox::with_cached_token();
 
-    let output = run(
-        sandbox
-            .command(&["api", "user"])
-            .env("GH_TOKEN", "personal-token")
-            .env("GH_HOST", "enterprise.example.com")
-            .env("GITHUB_TOKEN", "personal-token")
-            .env("GH_ENTERPRISE_TOKEN", "enterprise-token")
-            .env("GITHUB_ENTERPRISE_TOKEN", "enterprise-token"),
-        "",
-    );
+    let output = run(sandbox.command(&["api", "user"]).envs(PERSONAL_ENV), "");
 
     assert!(output.status.success(), "{}", text(&output.stderr));
     let record = sandbox.record().expect("fake gh ran");
@@ -63,6 +63,36 @@ fn sets_installation_token_and_removes_other_tokens() {
             "GITHUB_ENTERPRISE_TOKEN": Value::Null,
         })
     );
+}
+
+#[test]
+fn runs_listed_commands_without_a_token_and_with_the_environment_unchanged() {
+    let sandbox = Sandbox::new();
+    sandbox.write_config_with("run_as_user = [\"pr create\"]\n");
+    sandbox.install_fake_gh();
+    let args = ["pr", "create", "--fill"];
+
+    let output = run(sandbox.command(&args).envs(PERSONAL_ENV), "");
+
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let record = sandbox.record().expect("fake gh ran");
+    assert_eq!(record["args"], json!(args));
+    assert_eq!(record["env"], json!(HashMap::from(PERSONAL_ENV)));
+}
+
+#[test]
+fn runs_unlisted_commands_with_the_installation_token() {
+    let sandbox = Sandbox::with_cached_token();
+    sandbox.write_config_with("run_as_user = [\"pr create\"]\n");
+
+    let output = run(
+        sandbox.command(&["pr", "comment", "1"]).envs(PERSONAL_ENV),
+        "",
+    );
+
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let record = sandbox.record().expect("fake gh ran");
+    assert_eq!(record["env"]["GH_TOKEN"], CACHED_TOKEN);
 }
 
 #[test]

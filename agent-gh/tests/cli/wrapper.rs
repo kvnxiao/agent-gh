@@ -59,6 +59,7 @@ fn status_reports_configuration_and_cached_expiry() {
             "private_key_path: {}",
             sandbox.path("missing.pem").display()
         ),
+        "run_as_user: []".to_owned(),
     ];
     for line in expected_lines {
         assert!(
@@ -68,6 +69,21 @@ fn status_reports_configuration_and_cached_expiry() {
     }
     assert!(stdout.contains("token: valid until "), "{stdout}");
     assert!(!stdout.contains(CACHED_TOKEN), "{stdout}");
+}
+
+#[test]
+fn status_reports_run_as_user_entries() {
+    let sandbox = Sandbox::with_cached_token();
+    sandbox.write_config_with("run_as_user = [\"pr  create\", \"pr new\"]\n");
+    let output = run(&mut sandbox.command(&["self", "status"]), "");
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let stdout = text(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == r#"run_as_user: ["pr create", "pr new"]"#),
+        "{stdout}"
+    );
 }
 
 #[test]
