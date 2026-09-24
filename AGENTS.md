@@ -13,17 +13,17 @@ metadata, and the build profiles.
 Run repository tasks through `just`. The recipes run under POSIX `sh`; on Windows, run them from Git
 Bash.
 
-| Recipe                     | Action                                                          |
-| -------------------------- | --------------------------------------------------------------- |
-| `just fmt`                 | Format with nightly rustfmt.                                    |
-| `just lint`                | Check formatting and run stable Clippy with `-D warnings`.      |
-| `just fix`                 | Apply Clippy fixes and formatting, then run `just lint`.        |
-| `just test`                | Run every test in the workspace.                                |
-| `just doc`                 | Build documentation with rustdoc warnings denied.               |
-| `just dependencies`        | Run `cargo audit` and `cargo machete`.                          |
-| `just check`               | Run `lint`, `test`, `doc`, and `dependencies`.                  |
-| `just check-msrv agent-gh` | Check the package with its declared `rust-version` toolchain.   |
-| `just install-hooks`       | Point `core.hooksPath` at the committed `.githooks/` directory. |
+| Recipe                     | Action                                                        |
+| -------------------------- | ------------------------------------------------------------- |
+| `just fmt`                 | Format with nightly rustfmt.                                  |
+| `just lint`                | Check formatting and run stable Clippy with `-D warnings`.    |
+| `just fix`                 | Apply Clippy fixes and formatting, then run `just lint`.      |
+| `just test`                | Run every test in the workspace.                              |
+| `just doc`                 | Build documentation with rustdoc warnings denied.             |
+| `just dependencies`        | Run `cargo audit` and `cargo machete`.                        |
+| `just check`               | Run `lint`, `test`, `doc`, and `dependencies`.                |
+| `just check-msrv agent-gh` | Check the package with its declared `rust-version` toolchain. |
+| `just install`             | Install the `agent-gh` executable from this checkout.         |
 
 Run `just check` before committing. Run a single test or the executable with Cargo directly:
 
@@ -34,7 +34,8 @@ cargo +stable run -p agent-gh --locked -- <args>
 
 The integration tests in `agent-gh/tests/cli/` run the executable against a fake `gh` that
 `cargo test` builds from `agent-gh/examples/fake_gh.rs`. `cargo test --test cli` alone does not
-build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked` first.
+build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked` first. The tests
+that install the commit hook require Git 2.54 or later on `PATH`.
 
 ## Toolchains
 
@@ -50,8 +51,9 @@ build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked`
 ## Rules
 
 - Run every GitHub CLI command as `agent-gh` with the usual `gh` arguments, for example
-  `agent-gh pr view 1`. `agent-gh` runs the command as `kvnxiao-agent[bot]` unless the command
-  matches the user's `run_as_user` configuration.
+  `agent-gh pr view 1`. `agent-gh` runs most commands as the GitHub App's bot account and runs the
+  commands in the `run_as_user` list as the user. The App and the list are set in the profile that
+  `agent-gh self setup-git-hooks` selected for this repository.
 - Before writing or reviewing `*.rs` files or Cargo, Clippy, rustfmt, or toolchain manifests, read
   `.agents/skills/rust-rules/SKILL.md` and the references it lists for the task.
 - Before writing or reviewing `.github/workflows/**`, read

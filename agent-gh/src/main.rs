@@ -3,9 +3,12 @@
 mod bash;
 mod cache;
 mod cli;
+mod co_author;
 mod config;
+mod git;
 mod github;
 mod hook;
+mod identity;
 mod proxy;
 #[cfg(test)]
 mod test_support;

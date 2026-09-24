@@ -27,8 +27,8 @@ dependencies:
 
 check: lint test doc dependencies
 
-install-hooks:
-    git config core.hooksPath .githooks
+install:
+    cargo +stable install --locked --path agent-gh
 
 [positional-arguments]
 check-msrv package:
