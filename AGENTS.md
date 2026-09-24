@@ -31,6 +31,10 @@ cargo +stable test -p agent-gh --locked <test-name-filter>
 cargo +stable run -p agent-gh --locked -- <args>
 ```
 
+The integration tests in `agent-gh/tests/cli/` run the executable against a fake `gh` that
+`cargo test` builds from `agent-gh/examples/fake_gh.rs`. `cargo test --test cli` alone does not
+build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked` first.
+
 ## Toolchains
 
 - Compile, test, and run Clippy on floating stable; format with floating nightly. Example:
