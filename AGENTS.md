@@ -23,6 +23,7 @@ Bash.
 | `just dependencies`        | Run `cargo audit` and `cargo machete`.                          |
 | `just check`               | Run `lint`, `test`, `doc`, and `dependencies`.                  |
 | `just check-msrv agent-gh` | Check the package with its declared `rust-version` toolchain.   |
+| `just install-hooks`       | Point `core.hooksPath` at the committed `.githooks/` directory. |
 
 Run `just check` before committing. Run a single test or the executable with Cargo directly:
 
@@ -30,6 +31,10 @@ Run `just check` before committing. Run a single test or the executable with Car
 cargo +stable test -p agent-gh --locked <test-name-filter>
 cargo +stable run -p agent-gh --locked -- <args>
 ```
+
+The integration tests in `agent-gh/tests/cli/` run the executable against a fake `gh` that
+`cargo test` builds from `agent-gh/examples/fake_gh.rs`. `cargo test --test cli` alone does not
+build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked` first.
 
 ## Toolchains
 
@@ -44,6 +49,8 @@ cargo +stable run -p agent-gh --locked -- <args>
 
 ## Rules
 
+- Run every GitHub CLI command as `agent-gh` with the usual `gh` arguments, for example
+  `agent-gh pr view 1`, so GitHub attributes the work to `kvnxiao-agent[bot]`.
 - Before writing or reviewing `*.rs` files or Cargo, Clippy, rustfmt, or toolchain manifests, read
   `.agents/skills/rust-rules/SKILL.md` and the references it lists for the task.
 - Before writing or reviewing `.github/workflows/**`, read

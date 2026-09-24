@@ -1,0 +1,14 @@
+{
+  "session_id": "5f1f3c1e-0000-4000-8000-000000000001",
+  "transcript_path": "/home/agent/.claude/projects/repo/5f1f3c1e.jsonl",
+  "cwd": "/home/agent/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh issue list --repo kvnxiao/agent-gh",
+    "description": "List open issues",
+    "timeout": 120000
+  },
+  "tool_use_id": "toolu_01ABCDEFGHIJKLMNOPQRSTUV"
+}

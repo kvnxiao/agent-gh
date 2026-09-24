@@ -1,0 +1,12 @@
+{
+  "session_id": "019a0000-0000-7000-8000-000000000002",
+  "transcript_path": "/home/agent/.codex/sessions/2026/09/24/rollout.jsonl",
+  "cwd": "/home/agent/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5-codex",
+  "tool_name": "Bash",
+  "tool_use_id": "call_0123456789abcdef",
+  "tool_input": {
+    "command": "cd /home/agent/repo && gh pr view 1"
+  }
+}
