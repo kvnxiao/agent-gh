@@ -1,3 +1,4 @@
+use crate::config::Profile;
 use aws_lc_rs::encoding::AsDer;
 use aws_lc_rs::rsa::KeyPair;
 use aws_lc_rs::rsa::KeySize;
@@ -8,6 +9,7 @@ use std::io::BufReader;
 use std::io::Write;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -44,6 +46,17 @@ pub(crate) fn write_key(dir: &TempDir) -> Utf8PathBuf {
         Utf8PathBuf::try_from(dir.path().join("app.pem")).expect("temporary directory is UTF-8");
     fs_err::write(&path, key_pem()).expect("private key is written");
     path
+}
+
+pub(crate) fn profile(dir: &TempDir, app_id: u64, installation_id: u64) -> Profile {
+    Profile {
+        name: "test".to_owned(),
+        app_id: NonZeroU64::new(app_id).expect("fixture App ID is nonzero"),
+        installation_id: NonZeroU64::new(installation_id)
+            .expect("fixture installation ID is nonzero"),
+        private_key_path: write_key(dir),
+        run_as_user: Vec::new(),
+    }
 }
 
 pub(crate) struct Response {
