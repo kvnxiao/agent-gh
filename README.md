@@ -127,10 +127,16 @@ just --list          # list recipes
 just check           # formatting, Clippy, tests, docs, and dependency checks
 just fix             # apply Clippy fixes and formatting, then lint
 just check-msrv agent-gh
+just install-hooks   # use the committed .githooks/ directory in this clone
 ```
 
 The integration tests in `agent-gh/tests/cli/` run the built executable against a fake `gh` that
 `cargo test` builds from `agent-gh/examples/fake_gh.rs`. No test contacts GitHub.
+
+The repository's `.claude/settings.json` and `.codex/hooks.json` run `agent-gh self hook-check`
+before each Bash command. Run `just install-hooks` once per clone; the `.githooks/commit-msg` hook
+then adds a `Co-authored-by: kvnxiao-agent[bot]` trailer to commits made from Claude Code or Codex
+sessions and leaves other commits unchanged.
 
 Formatting uses nightly rustfmt because `rustfmt.toml` enables unstable options. Configure the
 editor to format with nightly as well; for rust-analyzer:

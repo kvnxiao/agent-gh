@@ -27,6 +27,9 @@ dependencies:
 
 check: lint test doc dependencies
 
+install-hooks:
+    git config core.hooksPath .githooks
+
 [positional-arguments]
 check-msrv package:
     #!/usr/bin/env bash
