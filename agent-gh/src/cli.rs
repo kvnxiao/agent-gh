@@ -17,7 +17,9 @@ const USAGE: &str = "\
 Usage: agent-gh <gh arguments>...
        agent-gh self <command>
 
-Run the GitHub CLI with a GitHub App installation token.
+Run the GitHub CLI with a GitHub App installation token. Commands that start
+with a run_as_user entry in the configuration file run with the user's
+credentials instead.
 
 Wrapper commands:
   self --help       Print this usage
@@ -65,6 +67,9 @@ fn run_self(args: &[OsString]) -> ExitCode {
 fn proxy_gh(args: &[OsString]) -> Result<ExitCode> {
     let paths = Paths::from_env()?;
     let config = Config::load(&paths.config)?;
+    if config.run_as_user.iter().any(|prefix| prefix.matches(args)) {
+        return proxy::run_gh_as_user(args);
+    }
     let token = cache::obtain(&config, &paths.cache, &GitHub::new(), Timestamp::now())?;
     proxy::run_gh(args, &token.token)
 }
@@ -78,6 +83,12 @@ fn status() -> Result<ExitCode> {
     writeln!(stdout, "app_id: {}", config.app_id)?;
     writeln!(stdout, "installation_id: {}", config.installation_id)?;
     writeln!(stdout, "private_key_path: {}", config.private_key_path)?;
+    let run_as_user: Vec<String> = config
+        .run_as_user
+        .iter()
+        .map(|prefix| format!("\"{prefix}\""))
+        .collect();
+    writeln!(stdout, "run_as_user: [{}]", run_as_user.join(", "))?;
     let cached = cache::read(&paths.cache)?;
     let state = cache::describe(cached.as_ref(), &config, Timestamp::now());
     writeln!(stdout, "token: {state}")?;

@@ -154,6 +154,7 @@ mod tests {
             app_id: id(1),
             installation_id: id(2),
             private_key_path: test_support::write_key(&dir),
+            run_as_user: Vec::new(),
         };
         Fixture {
             config,
