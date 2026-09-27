@@ -28,8 +28,8 @@ fn self_help_prints_usage() {
     let stdout = text(&output.stdout);
     assert!(stdout.starts_with("Usage: agent-gh"), "{stdout}");
     for command in [
-        "  self setup <profile>  ",
-        "  self setup <profile> --git-hooks\n",
+        "  self setup [--] <profile>  ",
+        "  self setup --git-hooks [--] <profile>\n",
         "  self install-git-hooks  ",
         "  self remove-git-hooks  ",
     ] {
@@ -77,7 +77,7 @@ fn removed_setup_git_hooks_command_is_unknown() {
 fn malformed_setup_and_hook_commands_are_usage_errors() {
     let sandbox = Sandbox::new();
     sandbox.write_config();
-    let setup_usage = "agent-gh: usage: agent-gh self setup <profile> [--git-hooks]\n";
+    let setup_usage = "agent-gh: usage: agent-gh self setup [--git-hooks] [--] <profile>\n";
     for (args, expected) in [
         (&["self", "setup"][..], setup_usage),
         (&["self", "setup", "test", "extra"], setup_usage),
@@ -92,6 +92,14 @@ fn malformed_setup_and_hook_commands_are_usage_errors() {
         ),
         (&["self", "setup", "--hooks", "test"], setup_usage),
         (&["self", "setup", "--help"], setup_usage),
+        (&["self", "setup", "-test"], setup_usage),
+        (&["self", "setup", "-test", "--git-hooks"], setup_usage),
+        (&["self", "setup", "--"], setup_usage),
+        (&["self", "setup", "--", "test", "extra"], setup_usage),
+        (&["self", "setup", "--git-hooks", "--"], setup_usage),
+        (&["self", "setup", "test", "--"], setup_usage),
+        (&["self", "setup", "--", "test", "--git-hooks"], setup_usage),
+        (&["self", "setup", "--", "--git-hooks", "test"], setup_usage),
         (
             &["self", "install-git-hooks", "test"],
             "agent-gh: usage: agent-gh self install-git-hooks\n",

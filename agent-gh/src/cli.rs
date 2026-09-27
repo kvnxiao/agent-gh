@@ -38,8 +38,8 @@ Wrapper commands:
   self --version                  Print the agent-gh version
   self status                     Print the configuration, profile, and caches
   self refresh                    Replace the cached token and App identity
-  self setup <profile>            Select a profile for the repository
-  self setup <profile> --git-hooks
+  self setup [--] <profile>       Select a profile for the repository
+  self setup --git-hooks [--] <profile>
                                   Select a profile and install the commit hook
   self install-git-hooks          Install the commit hook for the selected
                                   profile
@@ -57,7 +57,7 @@ const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSI
 const USAGE_ERROR: u8 = 2;
 const HOOK_BLOCK: u8 = 2;
 const SETUP_COMMAND: &str = "agent-gh self setup <profile>";
-const SETUP_USAGE: &str = "agent-gh self setup <profile> [--git-hooks]";
+const SETUP_USAGE: &str = "agent-gh self setup [--git-hooks] [--] <profile>";
 const GIT_HOOKS_FLAG: &str = "--git-hooks";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -246,12 +246,15 @@ fn refresh() -> Result<ExitCode> {
 }
 
 fn setup_args<'a>(args: &[&'a str]) -> Option<(&'a str, GitHooks)> {
-    let (profile, hooks) = match *args {
-        [profile] => (profile, GitHooks::Keep),
-        [GIT_HOOKS_FLAG, profile] | [profile, GIT_HOOKS_FLAG] => (profile, GitHooks::Install),
-        _ => return None,
-    };
-    (!profile.starts_with('-')).then_some((profile, hooks))
+    match *args {
+        ["--", profile] => Some((profile, GitHooks::Keep)),
+        [GIT_HOOKS_FLAG, "--", profile] => Some((profile, GitHooks::Install)),
+        [profile] if !profile.starts_with('-') => Some((profile, GitHooks::Keep)),
+        [GIT_HOOKS_FLAG, profile] | [profile, GIT_HOOKS_FLAG] if !profile.starts_with('-') => {
+            Some((profile, GitHooks::Install))
+        }
+        _ => None,
+    }
 }
 
 fn setup(name: &str, hooks: GitHooks) -> Result<ExitCode> {

@@ -33,8 +33,9 @@ cargo +stable run -p agent-gh --locked -- <args>
 ```
 
 The integration tests in `agent-gh/tests/cli/` run the executable against a fake `gh` that
-`cargo test` builds from `agent-gh/examples/fake_gh.rs`. `cargo test --test cli` alone does not
-build the fake; run `cargo +stable build -p agent-gh --example fake_gh --locked` first. The tests
+`cargo test` builds from `agent-gh/examples/fake_gh.rs`; the hook-failure tests also use a fake
+`git` from `agent-gh/examples/fake_git.rs`. `cargo test --test cli` alone does not build the fakes;
+run `cargo +stable build -p agent-gh --example fake_gh --example fake_git --locked` first. The tests
 that install the commit hook require Git 2.54 or later on `PATH`.
 
 ## Toolchains

@@ -71,9 +71,14 @@ bot as a co-author of agent commits; see [Co-author trailer](#co-author-trailer)
    profile's installation token and the App's bot identity, and request each one from GitHub unless
    it is already cached; they fail when GitHub rejects the App ID, the private key, or the
    installation ID. They write to `.git/config` only after obtaining both.
-   If `setup <profile> --git-hooks` fails to write the hook after it writes the profile, the new
-   profile stays selected without a hook, and running `agent-gh self install-git-hooks` completes
-   the installation.
+   `setup <profile> --git-hooks` writes the profile first, so a hook write failure still leaves the
+   new profile selected. An already installed hook stays installed. A fresh installation that fails
+   partway leaves an inactive hook, which `agent-gh self status` reports as not installed;
+   `agent-gh self install-git-hooks` completes it and `agent-gh self remove-git-hooks` clears it.
+
+   `--git-hooks` goes before or after the profile name, and before `--` when `--` is present. A
+   profile name that starts with `-` must
+   follow `--`, as in `agent-gh self setup --git-hooks -- -work`.
 
 The configuration file is `~/.config/agent-gh/config.toml` on every platform, including Windows,
 so one dotfiles layout covers all of them. When `XDG_CONFIG_HOME` is set to an absolute path, it
@@ -221,18 +226,18 @@ agent-gh issue comment 123 --body-file checkpoint.md
 agent-gh pr create --head prepared-branch --body-file pr.md
 ```
 
-| Command                                     | Behavior                                                                          |
-| ------------------------------------------- | --------------------------------------------------------------------------------- |
-| `agent-gh self --help`                      | Print usage                                                                       |
-| `agent-gh self --version`                   | Print the version                                                                 |
-| `agent-gh self status`                      | Print the configuration, the repository's profile, the caches, and the hook state |
-| `agent-gh self refresh`                     | Request a new token and App identity, for example after the App changed           |
-| `agent-gh self setup <profile>`             | Select a profile for the repository                                               |
-| `agent-gh self setup <profile> --git-hooks` | Select a profile for the repository and install the commit hook                   |
-| `agent-gh self install-git-hooks`           | Install the commit hook for the repository's selected profile                     |
-| `agent-gh self remove-git-hooks`            | Remove the commit hook and keep the profile selection                             |
-| `agent-gh self co-author`                   | Print the co-author value for an agent commit; the commit hook runs it            |
-| `agent-gh self hook-check`                  | Check a Claude Code or Codex `PreToolUse` payload on stdin                        |
+| Command                                          | Behavior                                                                          |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `agent-gh self --help`                           | Print usage                                                                       |
+| `agent-gh self --version`                        | Print the version                                                                 |
+| `agent-gh self status`                           | Print the configuration, the repository's profile, the caches, and the hook state |
+| `agent-gh self refresh`                          | Request a new token and App identity, for example after the App changed           |
+| `agent-gh self setup [--] <profile>`             | Select a profile for the repository                                               |
+| `agent-gh self setup --git-hooks [--] <profile>` | Select a profile for the repository and install the commit hook                   |
+| `agent-gh self install-git-hooks`                | Install the commit hook for the repository's selected profile                     |
+| `agent-gh self remove-git-hooks`                 | Remove the commit hook and keep the profile selection                             |
+| `agent-gh self co-author`                        | Print the co-author value for an agent commit; the commit hook runs it            |
+| `agent-gh self hook-check`                       | Check a Claude Code or Codex `PreToolUse` payload on stdin                        |
 
 `self status` and `self refresh` work whether or not the commit hook is installed. In a repository
 that selects `personal` without the hook, `agent-gh self status` prints:
@@ -304,12 +309,14 @@ exits 0 without output.
 [agent-gh]
 	profile = personal
 [hook "agent-gh.commit-msg"]
-	event = commit-msg
 	command = git interpret-trailers --in-place --trim-empty --if-exists addIfDifferent --trailer \"Co-authored-by: $(agent-gh self co-author)\"
+	event = commit-msg
 ```
 
 Git 2.54 introduced config-defined hooks, the `hook.<name>.command` and `hook.<name>.event` keys;
-older Git ignores them. For each commit, Git runs the hook command through `sh` and passes the
+older Git ignores them. Git aborts every commit when `event` is set without `command`, and never
+runs a hook that has only `command`. Installation therefore writes `command` before `event`, and
+removal unsets `event` first. For each commit, Git runs the hook command through `sh` and passes the
 path of the message file as an argument. `sh` looks up `agent-gh` on `PATH` and runs
 `agent-gh self co-author`, and `git interpret-trailers` adds a `Co-authored-by` trailer with the
 output of `agent-gh self co-author` as the value. For an agent commit, the command prints the bot's
@@ -416,8 +423,10 @@ just install         # install agent-gh from this checkout with cargo install --
 ```
 
 The integration tests in `agent-gh/tests/cli/` run the built executable against a fake `gh` that
-`cargo test` builds from `agent-gh/examples/fake_gh.rs`. No test contacts GitHub. The integration
-tests run `git` from `PATH`, and the tests that install the commit hook require Git 2.54 or later.
+`cargo test` builds from `agent-gh/examples/fake_gh.rs`, and the hook-failure tests put a `git`
+built from `agent-gh/examples/fake_git.rs` ahead of the real Git on `PATH`. No test contacts
+GitHub. The integration tests run `git` from `PATH`, and the tests that install the commit hook
+require Git 2.54 or later.
 
 The repository's `.claude/settings.json` and `.codex/hooks.json` run `agent-gh self hook-check`
 before each Bash command. Run `agent-gh self setup <profile>` once in each local repository to

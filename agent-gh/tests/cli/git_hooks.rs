@@ -1,18 +1,23 @@
 use crate::support::AGENT_MARKER;
 use crate::support::CACHED_TOKEN;
 use crate::support::CO_AUTHOR;
+use crate::support::FAKE_GIT_FAIL_KEY;
 use crate::support::Sandbox;
 use crate::support::run;
 use crate::support::same_path;
 use crate::support::text;
+use crate::support::value;
 use std::iter;
 use std::process::Output;
 
 const CONFIG_KEY_PATTERN: &str = r"^(agent-gh|hook)\.";
-const HOOK_KEYS: &[&str] = &[
-    "hook.agent-gh.commit-msg.event commit-msg",
-    r#"hook.agent-gh.commit-msg.command git interpret-trailers --in-place --trim-empty --if-exists addIfDifferent --trailer "Co-authored-by: $(agent-gh self co-author)""#,
-];
+const EVENT_KEY: &str = "hook.agent-gh.commit-msg.event";
+const COMMAND_KEY: &str = "hook.agent-gh.commit-msg.command";
+const HOOK_EVENT: &str = "hook.agent-gh.commit-msg.event commit-msg";
+const HOOK_COMMAND: &str = r#"hook.agent-gh.commit-msg.command git interpret-trailers --in-place --trim-empty --if-exists addIfDifferent --trailer "Co-authored-by: $(agent-gh self co-author)""#;
+const HOOK_KEYS: &[&str] = &[HOOK_EVENT, HOOK_COMMAND];
+const DASH_PROFILE: &str =
+    "\n[profiles.-work]\napp_id = 1\ninstallation_id = 2\nprivate_key_path = \"missing.pem\"\n";
 const UNRELATED_HOOK: [(&str, &str); 2] = [
     ("hook.lint.event", "pre-commit"),
     ("hook.lint.command", "true"),
@@ -139,6 +144,39 @@ fn with_other_profile() -> Sandbox {
     sandbox
 }
 
+fn failing_git_write(sandbox: &Sandbox, key: &str, args: &[&str]) -> Output {
+    sandbox.install_fake_git();
+    run(sandbox.command(args).env(FAKE_GIT_FAIL_KEY, key), "")
+}
+
+fn assert_refused(output: &Output, option: &str, key: &str) {
+    assert_eq!(output.status.code(), Some(1), "{key}");
+    assert_eq!(
+        text(&output.stderr),
+        format!(
+            "agent-gh: `git config --local {option} {key}` failed: fake git: refused to write {key}\n"
+        )
+    );
+}
+
+fn hook_status(sandbox: &Sandbox) -> String {
+    let output = run(&mut sandbox.command(&["self", "status"]), "");
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let lines: Vec<String> = text(&output.stdout).lines().map(str::to_owned).collect();
+    value(&lines, "commit hook").to_owned()
+}
+
+fn partially_installed() -> Sandbox {
+    let sandbox = unconfigured();
+    let output = failing_git_write(
+        &sandbox,
+        EVENT_KEY,
+        &["self", "setup", "test", "--git-hooks"],
+    );
+    assert_refused(&output, "--replace-all", EVENT_KEY);
+    sandbox
+}
+
 fn assert_committed(output: &Output) {
     assert!(
         output.status.success(),
@@ -206,6 +244,51 @@ fn setup_with_git_hooks_writes_hook_keys_and_prints_co_author() {
             ],
         );
     }
+}
+
+#[test]
+fn setup_after_double_dash_selects_a_profile_that_starts_with_a_dash() {
+    let co_author = format!("co-author: {CO_AUTHOR}");
+    for (args, expected_output, expected_keys) in [
+        (
+            &["--", "-work"][..],
+            vec!["profile: -work", "commit hook: not installed"],
+            vec![selection("-work")],
+        ),
+        (
+            &["--git-hooks", "--", "-work"],
+            vec!["profile: -work", "commit hook: installed", &co_author],
+            expected_keys("-work"),
+        ),
+    ] {
+        let sandbox = unconfigured();
+        sandbox.write_config_with(DASH_PROFILE);
+
+        let stdout = sandbox.setup(args);
+
+        assert_setup_output(&sandbox, "work", &stdout, &expected_output);
+        assert_eq!(configured_keys(&sandbox), expected_keys, "{args:?}");
+    }
+}
+
+#[test]
+fn setup_after_double_dash_treats_the_git_hooks_flag_as_a_profile_name() {
+    let sandbox = unconfigured();
+
+    let output = run(
+        &mut sandbox.command(&["self", "setup", "--", "--git-hooks"]),
+        "",
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stderr),
+        format!(
+            "agent-gh: {} does not define profile `--git-hooks`; defined profiles: test\n",
+            sandbox.path("config.toml").display()
+        )
+    );
+    assert_eq!(configured_keys(&sandbox), Vec::<String>::new());
 }
 
 #[test]
@@ -739,4 +822,76 @@ fn remove_git_hooks_fails_outside_a_repository() {
         stderr.contains("--local can only be used inside a git repository"),
         "{stderr}"
     );
+}
+
+#[test]
+fn setup_that_fails_to_write_the_event_key_leaves_an_inactive_hook() {
+    let sandbox = partially_installed();
+
+    assert_eq!(
+        configured_keys(&sandbox),
+        sorted([selection("test"), HOOK_COMMAND.to_owned()])
+    );
+    assert_eq!(hook_status(&sandbox), "not installed");
+    assert_committed(&sandbox.agent_commit(&["-m", "subject"]));
+    assert_eq!(sandbox.last_message(), "subject\n\n");
+}
+
+#[test]
+fn install_git_hooks_completes_a_partial_installation() {
+    let sandbox = partially_installed();
+
+    let output = run(&mut sandbox.command(&["self", "install-git-hooks"]), "");
+
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert_eq!(configured_keys(&sandbox), expected_keys("test"));
+    assert_eq!(hook_status(&sandbox), "installed");
+    assert_committed(&sandbox.agent_commit(&["-m", "subject"]));
+    assert_eq!(co_authors(&sandbox.last_message()), [CO_AUTHOR]);
+}
+
+#[test]
+fn remove_git_hooks_clears_a_partial_installation() {
+    let sandbox = partially_installed();
+
+    let output = run(&mut sandbox.command(&["self", "remove-git-hooks"]), "");
+
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert_eq!(configured_keys(&sandbox), [selection("test")]);
+}
+
+#[test]
+fn failed_hook_write_during_a_profile_switch_keeps_the_hook_working() {
+    for key in [COMMAND_KEY, EVENT_KEY] {
+        let sandbox = with_other_profile();
+        sandbox.setup(&["test", "--git-hooks"]);
+
+        let output = failing_git_write(&sandbox, key, &["self", "setup", "other", "--git-hooks"]);
+
+        assert_refused(&output, "--replace-all", key);
+        assert_eq!(configured_keys(&sandbox), expected_keys("other"), "{key}");
+        assert_eq!(hook_status(&sandbox), "installed", "{key}");
+        assert_committed(&sandbox.agent_commit(&["-m", "subject"]));
+        assert_eq!(
+            co_authors(&sandbox.last_message()),
+            [OTHER_CO_AUTHOR],
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn remove_git_hooks_that_fails_to_unset_the_command_key_keeps_commits_working() {
+    let sandbox = Sandbox::with_hooks();
+
+    let output = failing_git_write(&sandbox, COMMAND_KEY, &["self", "remove-git-hooks"]);
+
+    assert_refused(&output, "--unset-all", COMMAND_KEY);
+    assert_eq!(
+        configured_keys(&sandbox),
+        sorted([selection("test"), HOOK_COMMAND.to_owned()])
+    );
+    assert_eq!(hook_status(&sandbox), "not installed");
+    assert_committed(&sandbox.agent_commit(&["-m", "subject"]));
+    assert_eq!(sandbox.last_message(), "subject\n\n");
 }
