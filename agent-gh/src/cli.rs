@@ -27,18 +27,23 @@ const USAGE: &str = "\
 Usage: agent-gh <gh arguments>...
        agent-gh self <command>
 
-Run the GitHub CLI with the installation token of a profile in the
-configuration file. The Git config of the repository in the working directory
-selects the profile. Commands that start with an entry of the profile's
-run_as_user list run with the user's credentials instead.
+Run the GitHub CLI with the user's normal gh authentication. A command that
+matches the run_as_bot rules of the selected profile runs with the
+installation token of the profile's GitHub App instead. The Git config of the
+repository in the working directory selects the profile from the
+configuration file.
 
 Wrapper commands:
   self --help                     Print this usage
   self --version                  Print the agent-gh version
   self status                     Print the configuration, profile, and caches
   self refresh                    Replace the cached token and App identity
-  self setup-git-hooks <profile>  Select a profile and install the commit hook
-  self remove-git-hooks           Remove the profile selection and commit hook
+  self setup [--] <profile>       Select a profile for the repository
+  self setup --git-hooks [--] <profile>
+                                  Select a profile and install the commit hook
+  self install-git-hooks          Install the commit hook for the selected
+                                  profile
+  self remove-git-hooks           Remove the commit hook and keep the profile
   self co-author                  Print the commit hook's co-author value
   self hook-check                 Check a Claude Code or Codex PreToolUse
                                   payload on stdin
@@ -51,7 +56,15 @@ Environment:
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), "\n");
 const USAGE_ERROR: u8 = 2;
 const HOOK_BLOCK: u8 = 2;
-const SETUP_COMMAND: &str = "agent-gh self setup-git-hooks <profile>";
+const SETUP_COMMAND: &str = "agent-gh self setup <profile>";
+const SETUP_USAGE: &str = "agent-gh self setup [--git-hooks] [--] <profile>";
+const GIT_HOOKS_FLAG: &str = "--git-hooks";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GitHooks {
+    Keep,
+    Install,
+}
 
 enum Selection<'a> {
     Profile(&'a Profile),
@@ -75,12 +88,14 @@ fn run_self(args: &[OsString]) -> ExitCode {
         ["--version"] => print_stdout(VERSION),
         ["status"] => report(status()),
         ["refresh"] => report(refresh()),
-        ["setup-git-hooks", profile] => report(setup_git_hooks(profile)),
-        ["setup-git-hooks", ..] => fail(
-            format_args!("usage: {SETUP_COMMAND}"),
-            ExitCode::from(USAGE_ERROR),
-        ),
+        ["setup", rest @ ..] => match setup_args(rest) {
+            Some((profile, hooks)) => report(setup(profile, hooks)),
+            None => usage_error(SETUP_USAGE),
+        },
+        ["install-git-hooks"] => report(install_git_hooks()),
+        ["install-git-hooks", ..] => usage_error("agent-gh self install-git-hooks"),
         ["remove-git-hooks"] => report(remove_git_hooks()),
+        ["remove-git-hooks", ..] => usage_error("agent-gh self remove-git-hooks"),
         ["co-author"] => co_author::run(co_author_value),
         ["hook-check"] => hook_check(),
         _ => fail(
@@ -97,11 +112,7 @@ fn proxy_gh(args: &[OsString]) -> Result<ExitCode> {
     let paths = Paths::from_env()?;
     let config = Config::load(&paths.config)?;
     let profile = require_profile(&config, "run gh")?;
-    if profile
-        .run_as_user
-        .iter()
-        .any(|prefix| prefix.matches(args))
-    {
+    if !profile.run_as_bot.selects_bot(args) {
         return proxy::run_gh_as_user(args);
     }
     let token = cache::obtain(profile, &paths.cache_dir, &GitHub::new(), Timestamp::now())?;
@@ -192,12 +203,7 @@ fn status() -> Result<ExitCode> {
         )?,
     }
     if in_repository {
-        let state = if git::hook_installed()? {
-            "installed"
-        } else {
-            "not installed"
-        };
-        writeln!(stdout, "commit hook: {state}")?;
+        writeln!(stdout, "commit hook: {}", hook_state()?)?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -206,12 +212,7 @@ fn write_profile(stdout: &mut impl Write, profile: &Profile, cache_dir: &Utf8Pat
     writeln!(stdout, "app_id: {}", profile.app_id)?;
     writeln!(stdout, "installation_id: {}", profile.installation_id)?;
     writeln!(stdout, "private_key_path: {}", profile.private_key_path)?;
-    let run_as_user: Vec<String> = profile
-        .run_as_user
-        .iter()
-        .map(|prefix| format!("\"{prefix}\""))
-        .collect();
-    writeln!(stdout, "run_as_user: [{}]", run_as_user.join(", "))?;
+    writeln!(stdout, "run_as_bot: {}", profile.run_as_bot)?;
     writeln!(
         stdout,
         "token cache: {}",
@@ -244,34 +245,93 @@ fn refresh() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn setup_git_hooks(name: &str) -> Result<ExitCode> {
+fn setup_args<'a>(args: &[&'a str]) -> Option<(&'a str, GitHooks)> {
+    match *args {
+        ["--", profile] => Some((profile, GitHooks::Keep)),
+        [GIT_HOOKS_FLAG, "--", profile] => Some((profile, GitHooks::Install)),
+        [profile] if !profile.starts_with('-') => Some((profile, GitHooks::Keep)),
+        [GIT_HOOKS_FLAG, profile] | [profile, GIT_HOOKS_FLAG] if !profile.starts_with('-') => {
+            Some((profile, GitHooks::Install))
+        }
+        _ => None,
+    }
+}
+
+fn setup(name: &str, hooks: GitHooks) -> Result<ExitCode> {
     let paths = Paths::from_env()?;
     let config = Config::load(&paths.config)?;
     let profile = config.profile(name)?;
-    git::require_config_hooks()?;
-    let root = match git::worktree()? {
-        Worktree::Root(root) => root,
-        Worktree::NoRepository(stderr) => {
-            bail!("setup-git-hooks must run in a Git working tree: {stderr}")
+    let (root, co_author) = match hooks {
+        GitHooks::Keep => (require_worktree("setup")?, None),
+        GitHooks::Install => {
+            let root = require_hook_support("setup")?;
+            (root, Some(hook_co_author(profile, &paths)?))
         }
     };
+    git::select_profile(&profile.name)?;
+    if hooks == GitHooks::Install {
+        git::install_hooks()?;
+    }
+    print_setup(&root, profile, co_author.as_deref())
+}
+
+fn install_git_hooks() -> Result<ExitCode> {
+    let paths = Paths::from_env()?;
+    let config = Config::load(&paths.config)?;
+    let root = require_hook_support("install-git-hooks")?;
+    let profile = require_profile(&config, "install the commit hook")?;
+    let co_author = hook_co_author(profile, &paths)?;
+    git::install_hooks()?;
+    print_setup(&root, profile, Some(&co_author))
+}
+
+fn require_hook_support(command: &str) -> Result<Utf8PathBuf> {
+    git::require_config_hooks()?;
+    require_worktree(command)
+}
+
+fn require_worktree(command: &str) -> Result<Utf8PathBuf> {
+    match git::worktree()? {
+        Worktree::Root(root) => Ok(root),
+        Worktree::NoRepository(stderr) => {
+            bail!("{command} must run in a Git working tree: {stderr}")
+        }
+    }
+}
+
+fn hook_co_author(profile: &Profile, paths: &Paths) -> Result<String> {
     let github = GitHub::new();
     let now = Timestamp::now();
     cache::obtain(profile, &paths.cache_dir, &github, now)?;
     let identity = identity::obtain(profile, &paths.cache_dir, &github, now)?;
-    git::install_hooks(&profile.name)?;
+    Ok(identity.co_author())
+}
+
+fn print_setup(root: &Utf8Path, profile: &Profile, co_author: Option<&str>) -> Result<ExitCode> {
+    let hook_state = hook_state()?;
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "repository: {root}")?;
     writeln!(stdout, "profile: {}", profile.name)?;
-    writeln!(stdout, "co-author: {}", identity.co_author())?;
+    writeln!(stdout, "commit hook: {hook_state}")?;
+    if let Some(co_author) = co_author {
+        writeln!(stdout, "co-author: {co_author}")?;
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+fn hook_state() -> Result<&'static str> {
+    Ok(if git::hook_installed()? {
+        "installed"
+    } else {
+        "not installed"
+    })
 }
 
 fn remove_git_hooks() -> Result<ExitCode> {
     git::remove_hooks()?;
     writeln!(
         io::stdout().lock(),
-        "removed the profile selection and the commit hook"
+        "removed the commit hook; kept the profile selection"
     )?;
     Ok(ExitCode::SUCCESS)
 }
@@ -292,6 +352,10 @@ fn report(result: Result<ExitCode>) -> ExitCode {
         Ok(code) => code,
         Err(error) => fail(format_args!("{error:#}"), ExitCode::FAILURE),
     }
+}
+
+fn usage_error(usage: &str) -> ExitCode {
+    fail(format_args!("usage: {usage}"), ExitCode::from(USAGE_ERROR))
 }
 
 fn print_stdout(text: &str) -> ExitCode {

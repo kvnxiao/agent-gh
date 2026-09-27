@@ -5,17 +5,18 @@ use anyhow::bail;
 use camino::Utf8PathBuf;
 use std::fmt;
 use std::io;
-use std::iter;
 use std::process::Command;
 
 const PROFILE_KEY: &str = "agent-gh.profile";
-const HOOK_COMMAND_KEY: &str = "hook.agent-gh.commit-msg.command";
+// Git aborts every commit while the event key exists without the command key,
+// so installation writes these keys in order and removal unsets them in
+// reverse.
 const HOOK_KEYS: &[(&str, &str)] = &[
-    ("hook.agent-gh.commit-msg.event", "commit-msg"),
     (
-        HOOK_COMMAND_KEY,
+        "hook.agent-gh.commit-msg.command",
         r#"git interpret-trailers --in-place --trim-empty --if-exists addIfDifferent --trailer "Co-authored-by: $(agent-gh self co-author)""#,
     ),
+    ("hook.agent-gh.commit-msg.event", "commit-msg"),
 ];
 const CONFIG_HOOKS_VERSION: Version = Version {
     major: 2,
@@ -78,7 +79,12 @@ pub(crate) fn worktree() -> Result<Worktree> {
 }
 
 pub(crate) fn hook_installed() -> Result<bool> {
-    Ok(git(&["config", "--local", "--get", HOOK_COMMAND_KEY])?.succeeded())
+    for &(key, _) in HOOK_KEYS {
+        if !git(&["config", "--local", "--get", key])?.succeeded() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(crate) fn require_config_hooks() -> Result<()> {
@@ -89,21 +95,19 @@ pub(crate) fn require_config_hooks() -> Result<()> {
     check_version(&output.stdout)
 }
 
-pub(crate) fn install_hooks(profile: &str) -> Result<()> {
-    for &(key, value) in iter::once(&(PROFILE_KEY, profile)).chain(HOOK_KEYS) {
-        let output = git(&["config", "--local", "--replace-all", key, value])?;
-        if !output.succeeded() {
-            bail!(
-                "`git config --local --replace-all {key}` failed: {}",
-                output.stderr
-            );
-        }
+pub(crate) fn select_profile(profile: &str) -> Result<()> {
+    set_local(PROFILE_KEY, profile)
+}
+
+pub(crate) fn install_hooks() -> Result<()> {
+    for &(key, value) in HOOK_KEYS {
+        set_local(key, value)?;
     }
     Ok(())
 }
 
 pub(crate) fn remove_hooks() -> Result<()> {
-    for key in iter::once(PROFILE_KEY).chain(HOOK_KEYS.iter().map(|&(key, _)| key)) {
+    for &(key, _) in HOOK_KEYS.iter().rev() {
         let output = git(&["config", "--local", "--unset-all", key])?;
         if !matches!(output.code, Some(0 | UNSET_KEY_ABSENT)) {
             bail!(
@@ -111,6 +115,17 @@ pub(crate) fn remove_hooks() -> Result<()> {
                 output.stderr
             );
         }
+    }
+    Ok(())
+}
+
+fn set_local(key: &str, value: &str) -> Result<()> {
+    let output = git(&["config", "--local", "--replace-all", key, value])?;
+    if !output.succeeded() {
+        bail!(
+            "`git config --local --replace-all {key}` failed: {}",
+            output.stderr
+        );
     }
     Ok(())
 }

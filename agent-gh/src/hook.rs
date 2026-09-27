@@ -26,9 +26,9 @@ pub(crate) fn block_message(payload: impl Read) -> Option<String> {
     };
     match bash::find_direct_gh(&command) {
         Ok(Some(word)) => Some(format!(
-            "agent-gh: `{word}` runs the GitHub CLI with personal credentials. Replace `{word}` \
-             with `agent-gh` to run the command as the GitHub App bot, or as the user when the \
-             command matches the run_as_user configuration."
+            "agent-gh: `{word}` runs the GitHub CLI without agent-gh. Replace `{word}` with \
+             `agent-gh`, which runs the command with the user's normal gh authentication, or \
+             as the GitHub App bot when the command matches the profile's run_as_bot rules."
         )),
         Err(ParseError::TooDeep) => Some(format!(
             "agent-gh: cannot check this command: it nests more than {MAX_NESTING} levels of \
@@ -69,9 +69,11 @@ mod tests {
     fn blocks_direct_gh_invocation() {
         let message =
             block_message(payload("gh issue list").as_bytes()).expect("command is blocked");
-        assert!(
-            message.contains("Replace `gh` with `agent-gh`"),
-            "{message}"
+        assert_eq!(
+            message,
+            "agent-gh: `gh` runs the GitHub CLI without agent-gh. Replace `gh` with `agent-gh`, \
+             which runs the command with the user's normal gh authentication, or as the GitHub \
+             App bot when the command matches the profile's run_as_bot rules."
         );
     }
 

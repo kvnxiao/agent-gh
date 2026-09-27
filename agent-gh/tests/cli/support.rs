@@ -16,6 +16,7 @@ use tempfile::TempDir;
 pub(crate) const CACHED_TOKEN: &str = "cached-installation-token";
 pub(crate) const CO_AUTHOR: &str = "test-app[bot] <42+test-app[bot]@users.noreply.github.com>";
 pub(crate) const AGENT_MARKER: &str = "CLAUDE_CODE_CHILD_SESSION";
+pub(crate) const FAKE_GIT_FAIL_KEY: &str = "FAKE_GIT_FAIL_KEY";
 
 const AGENT_VARIABLES: &[&str] = &[
     "CLAUDE_CODE_CHILD_SESSION",
@@ -73,15 +74,18 @@ impl Sandbox {
 
     pub(crate) fn with_hooks() -> Self {
         let sandbox = Self::configured();
-        sandbox.setup_git_hooks("test");
+        sandbox.setup(&["test", "--git-hooks"]);
         sandbox
     }
 
-    pub(crate) fn setup_git_hooks(&self, profile: &str) -> String {
-        let output = run(&mut self.command(&["self", "setup-git-hooks", profile]), "");
+    pub(crate) fn setup(&self, args: &[&str]) -> String {
+        let output = run(
+            &mut self.command(&[&["self", "setup"][..], args].concat()),
+            "",
+        );
         assert!(
             output.status.success(),
-            "setup-git-hooks failed: {}",
+            "setup {args:?} failed: {}",
             text(&output.stderr)
         );
         text(&output.stdout)
@@ -139,23 +143,31 @@ impl Sandbox {
     }
 
     pub(crate) fn install_fake_gh(&self) {
+        self.install_example("fake_gh", "gh");
+    }
+
+    pub(crate) fn install_fake_git(&self) {
+        self.install_example("fake_git", "git");
+    }
+
+    fn install_example(&self, example: &str, program: &str) {
         let source = agent_gh_dir()
             .join("examples")
-            .join(format!("fake_gh{EXE_SUFFIX}"));
+            .join(format!("{example}{EXE_SUFFIX}"));
         assert!(
             source.is_file(),
-            "{} is missing; build it with `cargo +stable build -p agent-gh --example fake_gh --locked`",
+            "{} is missing; build it with `cargo +stable build -p agent-gh --example {example} --locked`",
             source.display()
         );
-        fs_err::copy(&source, self.path(&format!("bin/gh{EXE_SUFFIX}")))
-            .expect("fake gh is copied");
+        fs_err::copy(&source, self.path(&format!("bin/{program}{EXE_SUFFIX}")))
+            .expect("example is copied");
     }
 
     pub(crate) fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-gh"));
         command
             .args(args)
-            .env("FAKE_GH_RECORD", self.path("record.json"))
+            .env("FAKE_GH_RECORD", self.path("record.jsonl"))
             .env_remove("FAKE_GH_EXIT");
         self.isolate(&mut command);
         command
@@ -203,11 +215,19 @@ impl Sandbox {
     }
 
     pub(crate) fn record(&self) -> Option<Value> {
-        let path = self.path("record.json");
-        path.exists().then(|| {
-            let text = fs_err::read_to_string(path).expect("record is readable");
-            serde_json::from_str(&text).expect("record is JSON")
-        })
+        self.records().pop()
+    }
+
+    pub(crate) fn records(&self) -> Vec<Value> {
+        let path = self.path("record.jsonl");
+        if !path.exists() {
+            return Vec::new();
+        }
+        fs_err::read_to_string(path)
+            .expect("records are readable")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("record is JSON"))
+            .collect()
     }
 
     fn isolate(&self, command: &mut Command) {
@@ -221,6 +241,8 @@ impl Sandbox {
             .env("AGENT_GH_CONFIG", self.path("config.toml"))
             .env("AGENT_GH_CACHE_DIR", self.path("cache"))
             .env("PATH", search_path)
+            .env("FAKE_GIT_REAL", real_git())
+            .env_remove(FAKE_GIT_FAIL_KEY)
             .env("GIT_CONFIG_GLOBAL", self.path("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("LC_ALL", "C")
@@ -272,6 +294,14 @@ fn agent_gh_dir() -> PathBuf {
         .parent()
         .expect("agent-gh has a parent directory")
         .to_path_buf()
+}
+
+fn real_git() -> PathBuf {
+    let name = format!("git{EXE_SUFFIX}");
+    env::split_paths(&env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join(&name))
+        .find(|path| path.is_file())
+        .expect("git is on PATH")
 }
 
 fn inherited_path_without(program: &str) -> Vec<PathBuf> {

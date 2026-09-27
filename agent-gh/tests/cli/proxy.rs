@@ -7,17 +7,17 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 
+const PERSONAL_TOKEN: &str = "personal-token";
 const PERSONAL_ENV: [(&str, &str); 5] = [
-    ("GH_TOKEN", "personal-token"),
+    ("GH_TOKEN", PERSONAL_TOKEN),
     ("GH_HOST", "enterprise.example.com"),
-    ("GITHUB_TOKEN", "personal-token"),
+    ("GITHUB_TOKEN", PERSONAL_TOKEN),
     ("GH_ENTERPRISE_TOKEN", "enterprise-token"),
     ("GITHUB_ENTERPRISE_TOKEN", "enterprise-token"),
 ];
 
 #[test]
-fn passes_arguments_stdin_working_directory_and_exit_status() {
-    let sandbox = Sandbox::configured();
+fn passes_arguments_stdin_working_directory_and_exit_status_on_both_paths() {
     let args = [
         "issue",
         "comment",
@@ -27,25 +27,42 @@ fn passes_arguments_stdin_working_directory_and_exit_status() {
         "--body-file",
         "-",
     ];
+    for (run_as_bot, expected_token) in [
+        ("run_as_bot = [\"issue comment\"]\n", CACHED_TOKEN),
+        ("", PERSONAL_TOKEN),
+    ] {
+        let sandbox = Sandbox::configured();
+        sandbox.write_config_with(run_as_bot);
+        fs_err::create_dir(sandbox.path("work/sub")).expect("subdirectory is created");
 
-    let output = run(
-        sandbox.command(&args).env("FAKE_GH_EXIT", "3"),
-        "body from stdin",
-    );
+        let output = run(
+            sandbox
+                .command(&args)
+                .current_dir(sandbox.path("work/sub"))
+                .env("GH_TOKEN", PERSONAL_TOKEN)
+                .env("FAKE_GH_EXIT", "3"),
+            "body from stdin",
+        );
 
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(text(&output.stdout), "fake gh stdout\n");
-    assert_eq!(text(&output.stderr), "fake gh stderr\n");
-    let record = sandbox.record().expect("fake gh ran");
-    assert_eq!(record["args"], json!(args));
-    assert_eq!(record["stdin"], "body from stdin");
-    let cwd = record["cwd"].as_str().expect("cwd is recorded");
-    assert!(same_path(cwd, &sandbox.path("work")), "{cwd}");
+        assert_eq!(output.status.code(), Some(3), "{run_as_bot:?}");
+        assert_eq!(text(&output.stdout), "fake gh stdout\n", "{run_as_bot:?}");
+        assert_eq!(text(&output.stderr), "fake gh stderr\n", "{run_as_bot:?}");
+        let records = sandbox.records();
+        let [record] = records.as_slice() else {
+            panic!("{run_as_bot:?}: expected one gh invocation, got {records:#?}");
+        };
+        assert_eq!(record["args"], json!(args), "{run_as_bot:?}");
+        assert_eq!(record["stdin"], "body from stdin", "{run_as_bot:?}");
+        assert_eq!(record["env"]["GH_TOKEN"], expected_token, "{run_as_bot:?}");
+        let cwd = record["cwd"].as_str().expect("cwd is recorded");
+        assert!(same_path(cwd, &sandbox.path("work/sub")), "{cwd}");
+    }
 }
 
 #[test]
-fn sets_installation_token_and_removes_other_tokens() {
+fn bot_path_sets_installation_token_and_removes_other_tokens() {
     let sandbox = Sandbox::configured();
+    sandbox.write_config_with("run_as_bot = [\"api user\"]\n");
 
     let output = run(sandbox.command(&["api", "user"]).envs(PERSONAL_ENV), "");
 
@@ -64,48 +81,76 @@ fn sets_installation_token_and_removes_other_tokens() {
 }
 
 #[test]
-fn runs_listed_commands_without_a_token_and_with_the_environment_unchanged() {
+fn user_path_keeps_the_environment_and_reads_no_app_credentials() {
     let sandbox = Sandbox::new();
-    sandbox.write_config_with("run_as_user = [\"pr create\"]\n");
+    sandbox.write_config_with("run_as_bot = [\"pr comment\"]\n");
     sandbox.select_profile("test");
     sandbox.install_fake_gh();
+    // A directory at the token cache path makes every read of the cache fail,
+    // and the profile's private key does not exist.
+    fs_err::create_dir(sandbox.path("cache/token-1-2.toml")).expect("cache trap is created");
     let args = ["pr", "create", "--fill"];
 
-    let output = run(sandbox.command(&args).envs(PERSONAL_ENV), "");
+    let user = run(sandbox.command(&args).envs(PERSONAL_ENV), "");
 
-    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(user.status.success(), "{}", text(&user.stderr));
     let record = sandbox.record().expect("fake gh ran");
     assert_eq!(record["args"], json!(args));
     assert_eq!(record["env"], json!(HashMap::from(PERSONAL_ENV)));
-}
 
-#[test]
-fn runs_unlisted_commands_with_the_installation_token() {
-    let sandbox = Sandbox::configured();
-    sandbox.write_config_with("run_as_user = [\"pr create\"]\n");
-
-    let output = run(
+    let bot = run(
         sandbox.command(&["pr", "comment", "1"]).envs(PERSONAL_ENV),
         "",
     );
 
-    assert!(output.status.success(), "{}", text(&output.stderr));
-    let record = sandbox.record().expect("fake gh ran");
-    assert_eq!(record["env"]["GH_TOKEN"], CACHED_TOKEN);
+    assert_eq!(bot.status.code(), Some(1), "{}", text(&bot.stderr));
+    assert_eq!(sandbox.records().len(), 1);
 }
 
 #[test]
-fn uses_the_run_as_user_list_of_the_selected_profile() {
-    let sandbox = Sandbox::configured();
-    sandbox.write_config_with(
-        "\n[profiles.personal]\napp_id = 3\ninstallation_id = 4\nprivate_key_path = \"missing.pem\"\nrun_as_user = [\"pr create\"]\n",
+fn failed_token_acquisition_does_not_run_gh() {
+    let sandbox = Sandbox::new();
+    sandbox.write_config_with("run_as_bot = [\"issue comment\"]\n");
+    sandbox.select_profile("test");
+    sandbox.install_fake_gh();
+
+    let output = run(
+        sandbox
+            .command(&["issue", "comment", "1", "--body", "hi"])
+            .envs(PERSONAL_ENV),
+        "",
     );
 
-    let output = run(sandbox.command(&["pr", "create"]).envs(PERSONAL_ENV), "");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.starts_with("agent-gh: ") && stderr.contains("missing.pem"),
+        "{stderr}"
+    );
+    assert_eq!(sandbox.records(), Vec::<Value>::new());
+}
 
-    assert!(output.status.success(), "{}", text(&output.stderr));
-    let record = sandbox.record().expect("fake gh ran");
-    assert_eq!(record["env"]["GH_TOKEN"], CACHED_TOKEN);
+#[test]
+fn uses_the_run_as_bot_rules_of_the_selected_profile() {
+    let sandbox = Sandbox::configured();
+    sandbox.write_config_with(
+        "\n[profiles.personal]\napp_id = 3\ninstallation_id = 4\nprivate_key_path = \"missing.pem\"\nrun_as_bot = [\"pr create\"]\n",
+    );
+    sandbox.seed_token_for(3, 4);
+
+    for (profile, expected_token) in [("test", PERSONAL_TOKEN), ("personal", CACHED_TOKEN)] {
+        sandbox.select_profile(profile);
+
+        let output = run(sandbox.command(&["pr", "create"]).envs(PERSONAL_ENV), "");
+
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            text(&output.stderr)
+        );
+        let record = sandbox.record().expect("fake gh ran");
+        assert_eq!(record["env"]["GH_TOKEN"], expected_token, "{profile}");
+    }
 }
 
 #[test]
@@ -142,7 +187,7 @@ fn stops_in_a_repository_without_a_selected_profile() {
     assert!(same_path(root, &sandbox.path("work")), "{stderr}");
     assert!(
         stderr.ends_with(&format!(
-            ", so agent-gh did not run gh.\nAsk the user to run `agent-gh self setup-git-hooks <profile>` in that repository. Profiles in {}: test\n",
+            ", so agent-gh did not run gh.\nAsk the user to run `agent-gh self setup <profile>` in that repository. Profiles in {}: test\n",
             sandbox.path("config.toml").display()
         )),
         "{stderr}"
@@ -174,7 +219,9 @@ fn stops_outside_any_repository() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("Run the command in a repository where the user ran `agent-gh self setup-git-hooks <profile>`."),
+        stderr.contains(
+            "Run the command in a repository where the user ran `agent-gh self setup <profile>`."
+        ),
         "{stderr}"
     );
     assert_eq!(sandbox.record(), None);

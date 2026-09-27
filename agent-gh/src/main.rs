@@ -10,6 +10,7 @@ mod github;
 mod hook;
 mod identity;
 mod proxy;
+mod routing;
 #[cfg(test)]
 mod test_support;
 
