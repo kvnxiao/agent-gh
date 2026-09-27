@@ -73,15 +73,18 @@ impl Sandbox {
 
     pub(crate) fn with_hooks() -> Self {
         let sandbox = Self::configured();
-        sandbox.setup_git_hooks("test");
+        sandbox.setup(&["test", "--git-hooks"]);
         sandbox
     }
 
-    pub(crate) fn setup_git_hooks(&self, profile: &str) -> String {
-        let output = run(&mut self.command(&["self", "setup-git-hooks", profile]), "");
+    pub(crate) fn setup(&self, args: &[&str]) -> String {
+        let output = run(
+            &mut self.command(&[&["self", "setup"][..], args].concat()),
+            "",
+        );
         assert!(
             output.status.success(),
-            "setup-git-hooks failed: {}",
+            "setup {args:?} failed: {}",
             text(&output.stderr)
         );
         text(&output.stdout)
@@ -155,7 +158,7 @@ impl Sandbox {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-gh"));
         command
             .args(args)
-            .env("FAKE_GH_RECORD", self.path("record.json"))
+            .env("FAKE_GH_RECORD", self.path("record.jsonl"))
             .env_remove("FAKE_GH_EXIT");
         self.isolate(&mut command);
         command
@@ -203,11 +206,19 @@ impl Sandbox {
     }
 
     pub(crate) fn record(&self) -> Option<Value> {
-        let path = self.path("record.json");
-        path.exists().then(|| {
-            let text = fs_err::read_to_string(path).expect("record is readable");
-            serde_json::from_str(&text).expect("record is JSON")
-        })
+        self.records().pop()
+    }
+
+    pub(crate) fn records(&self) -> Vec<Value> {
+        let path = self.path("record.jsonl");
+        if !path.exists() {
+            return Vec::new();
+        }
+        fs_err::read_to_string(path)
+            .expect("records are readable")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("record is JSON"))
+            .collect()
     }
 
     fn isolate(&self, command: &mut Command) {

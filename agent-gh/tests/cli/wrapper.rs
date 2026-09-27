@@ -27,6 +27,15 @@ fn self_help_prints_usage() {
     assert!(output.status.success(), "{}", text(&output.stderr));
     let stdout = text(&output.stdout);
     assert!(stdout.starts_with("Usage: agent-gh"), "{stdout}");
+    for command in [
+        "  self setup <profile>  ",
+        "  self setup <profile> --git-hooks\n",
+        "  self install-git-hooks  ",
+        "  self remove-git-hooks  ",
+    ] {
+        assert!(stdout.contains(command), "{command:?}: {stdout}");
+    }
+    assert!(!stdout.contains("setup-git-hooks"), "{stdout}");
 }
 
 #[test]
@@ -51,19 +60,56 @@ fn unknown_self_command_is_a_usage_error() {
 }
 
 #[test]
-fn setup_without_a_profile_is_a_usage_error() {
-    let sandbox = Sandbox::configured();
-    for args in [
-        &["self", "setup-git-hooks"][..],
-        &["self", "setup-git-hooks", "test", "extra"],
+fn removed_setup_git_hooks_command_is_unknown() {
+    let output = run(
+        &mut Sandbox::configured().command(&["self", "setup-git-hooks", "test"]),
+        "",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("unknown wrapper command `self setup-git-hooks test`"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn malformed_setup_and_hook_commands_are_usage_errors() {
+    let sandbox = Sandbox::new();
+    sandbox.write_config();
+    let setup_usage = "agent-gh: usage: agent-gh self setup <profile> [--git-hooks]\n";
+    for (args, expected) in [
+        (&["self", "setup"][..], setup_usage),
+        (&["self", "setup", "test", "extra"], setup_usage),
+        (&["self", "setup", "--git-hooks"], setup_usage),
+        (
+            &["self", "setup", "--git-hooks", "--git-hooks"],
+            setup_usage,
+        ),
+        (
+            &["self", "setup", "test", "--git-hooks", "extra"],
+            setup_usage,
+        ),
+        (&["self", "setup", "--hooks", "test"], setup_usage),
+        (&["self", "setup", "--help"], setup_usage),
+        (
+            &["self", "install-git-hooks", "test"],
+            "agent-gh: usage: agent-gh self install-git-hooks\n",
+        ),
+        (
+            &["self", "remove-git-hooks", "--all"],
+            "agent-gh: usage: agent-gh self remove-git-hooks\n",
+        ),
     ] {
         let output = run(&mut sandbox.command(args), "");
         assert_eq!(output.status.code(), Some(2), "{args:?}");
-        assert_eq!(
-            text(&output.stderr),
-            "agent-gh: usage: agent-gh self setup-git-hooks <profile>\n"
-        );
+        assert_eq!(text(&output.stderr), expected, "{args:?}");
     }
+    let keys = run(
+        &mut sandbox.git(&["config", "--local", "--get-regexp", r"^(agent-gh|hook)\."]),
+        "",
+    );
+    assert_eq!(text(&keys.stdout), "");
 }
 
 #[test]
@@ -89,7 +135,7 @@ fn status_reports_configured_repository() {
         value(&lines, "private_key_path"),
         sandbox.path("missing.pem").display().to_string()
     );
-    assert_eq!(value(&lines, "run_as_user"), "[]");
+    assert_eq!(value(&lines, "run_as_bot"), "[]");
     assert_eq!(
         value(&lines, "token cache"),
         cache.join("token-1-2.toml").display().to_string()
@@ -117,6 +163,20 @@ fn status_reports_installed_commit_hook() {
 }
 
 #[test]
+fn status_reports_a_profile_selected_without_hooks() {
+    let sandbox = Sandbox::new();
+    sandbox.write_config();
+    sandbox.setup(&["test"]);
+
+    let lines = status_lines(&sandbox);
+
+    assert_eq!(value(&lines, "profile"), "test");
+    assert_eq!(value(&lines, "token"), "none cached");
+    assert_eq!(value(&lines, "co-author"), "not cached");
+    assert_eq!(value(&lines, "commit hook"), "not installed");
+}
+
+#[test]
 fn status_reports_missing_identity() {
     let sandbox = Sandbox::configured();
     fs_err::remove_file(sandbox.path("cache/identity-1.toml")).expect("identity cache is removed");
@@ -124,11 +184,14 @@ fn status_reports_missing_identity() {
 }
 
 #[test]
-fn status_reports_run_as_user_entries() {
+fn status_reports_run_as_bot_entries() {
     let sandbox = Sandbox::configured();
-    sandbox.write_config_with("run_as_user = [\"pr  create\", \"pr new\"]\n");
+    sandbox.write_config_with("run_as_bot = [\"pr  comment\", \"!pr comment --web\"]\n");
     let lines = status_lines(&sandbox);
-    assert_eq!(value(&lines, "run_as_user"), r#"["pr create", "pr new"]"#);
+    assert_eq!(
+        value(&lines, "run_as_bot"),
+        r#"["pr comment", "!pr comment --web"]"#
+    );
 }
 
 #[test]
@@ -144,7 +207,7 @@ fn status_reports_unconfigured_repository() {
     );
     assert_eq!(
         value(&lines, "profile"),
-        "none; run `agent-gh self setup-git-hooks <profile>` in the repository"
+        "none; run `agent-gh self setup <profile>` in the repository"
     );
     assert_eq!(value(&lines, "commit hook"), "not installed");
     assert!(

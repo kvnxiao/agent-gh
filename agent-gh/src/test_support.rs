@@ -1,4 +1,5 @@
 use crate::config::Profile;
+use crate::routing::Rules;
 use aws_lc_rs::encoding::AsDer;
 use aws_lc_rs::rsa::KeyPair;
 use aws_lc_rs::rsa::KeySize;
@@ -55,7 +56,7 @@ pub(crate) fn profile(dir: &TempDir, app_id: u64, installation_id: u64) -> Profi
         installation_id: NonZeroU64::new(installation_id)
             .expect("fixture installation ID is nonzero"),
         private_key_path: write_key(dir),
-        run_as_user: Vec::new(),
+        run_as_bot: Rules::default(),
     }
 }
 

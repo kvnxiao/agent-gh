@@ -51,9 +51,10 @@ that install the commit hook require Git 2.54 or later on `PATH`.
 ## Rules
 
 - Run every GitHub CLI command as `agent-gh` with the usual `gh` arguments, for example
-  `agent-gh pr view 1`. `agent-gh` runs most commands as the GitHub App's bot account and runs the
-  commands in the `run_as_user` list as the user. The App and the list are set in the profile that
-  `agent-gh self setup-git-hooks` selected for this repository.
+  `agent-gh pr view 1`. `agent-gh` runs commands with the user's normal `gh` authentication and
+  runs commands that match the profile's `run_as_bot` rules as the GitHub App's bot account. The
+  App and the rules are set in the profile that `agent-gh self setup <profile>` selected for this
+  repository.
 - Before writing or reviewing `*.rs` files or Cargo, Clippy, rustfmt, or toolchain manifests, read
   `.agents/skills/rust-rules/SKILL.md` and the references it lists for the task.
 - Before writing or reviewing `.github/workflows/**`, read

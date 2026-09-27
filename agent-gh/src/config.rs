@@ -1,3 +1,4 @@
+use crate::routing::Rules;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -7,9 +8,7 @@ use camino::Utf8PathBuf;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::fmt;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
@@ -49,30 +48,7 @@ pub(crate) struct Profile {
     pub(crate) app_id: NonZeroU64,
     pub(crate) installation_id: NonZeroU64,
     pub(crate) private_key_path: Utf8PathBuf,
-    pub(crate) run_as_user: Vec<CommandPrefix>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CommandPrefix(Vec<OsString>);
-
-impl CommandPrefix {
-    fn parse(entry: &str) -> Result<Self> {
-        let words: Vec<OsString> = entry.split_whitespace().map(OsString::from).collect();
-        if words.is_empty() {
-            bail!("run_as_user entry {entry:?} must contain a command");
-        }
-        Ok(Self(words))
-    }
-
-    pub(crate) fn matches(&self, args: &[OsString]) -> bool {
-        args.starts_with(&self.0)
-    }
-}
-
-impl fmt::Display for CommandPrefix {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.0.join(OsStr::new(" ")).display())
-    }
+    pub(crate) run_as_bot: Rules,
 }
 
 #[derive(Deserialize)]
@@ -89,7 +65,7 @@ struct ProfileFile {
     installation_id: NonZeroU64,
     private_key_path: String,
     #[serde(default)]
-    run_as_user: Vec<String>,
+    run_as_bot: Vec<String>,
 }
 
 impl Config {
@@ -150,17 +126,12 @@ impl Profile {
         if file.private_key_path.is_empty() {
             return Err(anyhow!("private_key_path must not be empty")).with_context(context);
         }
-        let run_as_user = file
-            .run_as_user
-            .iter()
-            .map(|entry| CommandPrefix::parse(entry))
-            .collect::<Result<_>>()
-            .with_context(context)?;
+        let run_as_bot = Rules::parse(&file.run_as_bot).with_context(context)?;
         Ok(Self {
             app_id: file.app_id,
             installation_id: file.installation_id,
             private_key_path: base_dir.join(file.private_key_path),
-            run_as_user,
+            run_as_bot,
             name,
         })
     }
@@ -224,7 +195,7 @@ mod tests {
     #[test]
     fn parses_profiles() {
         let config = parse(
-            "[profiles.personal]\napp_id = 1234567\ninstallation_id = 98765432\nprivate_key_path = \"personal.pem\"\nrun_as_user = [\"pr create\"]\n\n[profiles.work]\napp_id = 7654321\ninstallation_id = 12345678\nprivate_key_path = \"work.pem\"\n",
+            "[profiles.personal]\napp_id = 1234567\ninstallation_id = 98765432\nprivate_key_path = \"personal.pem\"\nrun_as_bot = [\"pr comment\"]\n\n[profiles.work]\napp_id = 7654321\ninstallation_id = 12345678\nprivate_key_path = \"work.pem\"\n",
         )
         .expect("configuration is valid");
 
@@ -233,14 +204,11 @@ mod tests {
         assert_eq!(personal.name, "personal");
         assert_eq!(personal.app_id.get(), 1_234_567);
         assert_eq!(personal.installation_id.get(), 98_765_432);
-        assert_eq!(
-            personal.run_as_user,
-            [CommandPrefix(vec!["pr".into(), "create".into()])]
-        );
+        assert_eq!(personal.run_as_bot.to_string(), r#"["pr comment"]"#);
         let work = config.profile("work").expect("work is defined");
         assert_eq!(work.app_id.get(), 7_654_321);
         assert_eq!(work.installation_id.get(), 12_345_678);
-        assert!(work.run_as_user.is_empty());
+        assert_eq!(work.run_as_bot.to_string(), "[]");
     }
 
     #[test]
@@ -373,63 +341,22 @@ mod tests {
     }
 
     #[test]
-    fn splits_run_as_user_entries_into_words() {
-        let config = parse(&format!(
-            "{PROFILE}private_key_path = \"app.pem\"\nrun_as_user = [\"pr create\", \" pr \t new \"]\n"
-        ))
-        .expect("configuration is valid");
+    fn rejects_malformed_run_as_bot_entry_with_the_profile_name() {
+        let message = error(&format!(
+            "{PROFILE}private_key_path = \"app.pem\"\nrun_as_bot = [\"pr comment\", \"!\"]\n"
+        ));
         assert_eq!(
-            config.profiles["test"].run_as_user,
-            [
-                CommandPrefix(vec!["pr".into(), "create".into()]),
-                CommandPrefix(vec!["pr".into(), "new".into()]),
-            ]
+            message,
+            r#"profile `test`: run_as_bot entry "!" must start with a positional word"#
         );
     }
 
     #[test]
-    fn rejects_blank_run_as_user_entries() {
-        let cases = [
-            (
-                "",
-                r#"profile `test`: run_as_user entry "" must contain a command"#,
-            ),
-            (
-                " \t ",
-                r#"profile `test`: run_as_user entry " \t " must contain a command"#,
-            ),
-        ];
-        for (entry, expected) in cases {
-            let message = error(&format!(
-                "{PROFILE}private_key_path = \"app.pem\"\nrun_as_user = [\"pr create\", \"{entry}\"]\n"
-            ));
-            assert_eq!(message, expected, "{entry:?}");
-        }
-    }
-
-    #[test]
-    fn command_prefix_matches_equal_leading_arguments() {
-        let prefix = CommandPrefix::parse("pr create").expect("entry contains a command");
-        let cases: &[(&[&str], bool)] = &[
-            (&["pr", "create"], true),
-            (&["pr", "create", "--fill"], true),
-            (&["pr"], false),
-            (&["pr", "comment", "1"], false),
-            (&["pr", "--repo", "owner/repo", "create"], false),
-            (&["PR", "create"], false),
-            (&["pr-create"], false),
-            (&["issue", "create"], false),
-        ];
-        for (args, expected) in cases {
-            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-            assert_eq!(prefix.matches(&args), *expected, "{args:?}");
-        }
-    }
-
-    #[test]
-    fn command_prefix_displays_words_separated_by_spaces() {
-        let prefix = CommandPrefix::parse(" pr \t create ").expect("entry contains a command");
-        assert_eq!(prefix.to_string(), "pr create");
+    fn rejects_removed_run_as_user_field() {
+        let message = error(&format!(
+            "{PROFILE}private_key_path = \"app.pem\"\nrun_as_user = [\"pr create\"]\n"
+        ));
+        assert!(message.contains("unknown field `run_as_user`"), "{message}");
     }
 
     #[test]

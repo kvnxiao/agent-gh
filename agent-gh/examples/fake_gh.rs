@@ -1,9 +1,9 @@
 //! Stand in for the GitHub CLI in `agent-gh` integration tests.
 //!
-//! The program writes its arguments, working directory, stdin, and credential
-//! variables as JSON to the file named by `FAKE_GH_RECORD`, prints one line to
-//! stdout and one to stderr, and exits with the status in `FAKE_GH_EXIT`
-//! (default 0).
+//! The program appends its arguments, working directory, stdin, and credential
+//! variables as one JSON line to the file named by `FAKE_GH_RECORD`, prints one
+//! line to stdout and one to stderr, and exits with the status in
+//! `FAKE_GH_EXIT` (default 0).
 
 use anyhow::Context;
 use anyhow::Result;
@@ -43,7 +43,11 @@ fn main() -> Result<ExitCode> {
         "env": variables,
     });
     let path = env::var_os("FAKE_GH_RECORD").context("FAKE_GH_RECORD is not set")?;
-    fs_err::write(path, record.to_string())?;
+    let mut file = fs_err::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{record}")?;
 
     writeln!(io::stdout().lock(), "fake gh stdout")?;
     writeln!(io::stderr().lock(), "fake gh stderr")?;
